@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -17,13 +18,12 @@ var newCmd = &cobra.Command{
 	Aliases: []string{"generate", "init"},
 	Short:   "Create a new Go project structure",
 	Long:    "Create a new Go project structure using the specified layered architecture template.",
-	Args:    cobra.ExactArgs(1), // Project name must be provided
+	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		projectName := args[0]
 
 		fmt.Printf("Creating project: %s...\n", projectName)
 
-		// Create the project structure
 		if err := createProjectStructure(projectName); err != nil {
 			return err
 		}
@@ -34,7 +34,6 @@ var newCmd = &cobra.Command{
 		fmt.Println("go mod tidy")
 		fmt.Println("go run cmd/server.go")
 
-		// Ask the user whether to automatically execute 'go mod tidy' and start the project
 		reader := bufio.NewReader(os.Stdin)
 		fmt.Print("\nDo you want to enter the directory, run 'go mod tidy' and start the project? (y/n): ")
 		input, err := reader.ReadString('\n')
@@ -46,7 +45,6 @@ var newCmd = &cobra.Command{
 		if input == "y" || input == "yes" {
 			projectDir := filepath.Join(".", projectName)
 
-			// run go mod tidy
 			fmt.Println("\nExecuting 'go mod tidy'...")
 			tidyCmd := exec.Command("go", "mod", "tidy")
 			tidyCmd.Dir = projectDir
@@ -57,7 +55,6 @@ var newCmd = &cobra.Command{
 			}
 			fmt.Println("✅ 'go mod tidy' completed successfully")
 
-			// Start the project (displaying Gin logs in real-time)
 			fmt.Println("\nStarting the project...")
 			runCmd := exec.Command("go", "run", "cmd/server.go")
 			runCmd.Dir = projectDir
@@ -72,7 +69,7 @@ var newCmd = &cobra.Command{
 	},
 }
 
-// createProjectStructure is the core function: creates directories and files
+// createProjectStructure creates the folder structure and starter files
 func createProjectStructure(name string) error {
 	dirs := []string{
 		"cmd",
@@ -98,20 +95,37 @@ func createProjectStructure(name string) error {
 		}
 	}
 
-	// go.mod file content
+	// 获取当前 Go 版本
+	goVersion := runtime.Version() // e.g., "go1.21.3"
+	goVersion = strings.TrimPrefix(goVersion, "go")
+
+	// 只保留主版本号和次版本号，例如 1.21.3 -> 1.21
+	parts := strings.Split(goVersion, ".")
+	if len(parts) >= 2 {
+		goVersion = parts[0] + "." + parts[1]
+	} else {
+		goVersion = "1.18" // fallback
+	}
+
+	// 确保最低为 1.18
+	if compareGoVersion(goVersion, "1.18") < 0 {
+		goVersion = "1.18"
+	}
+
+	// 生成 go.mod
 	goModContent := fmt.Sprintf(`module %s
 
-go 1.18
+go %s
 
 require (
 	github.com/gin-gonic/gin v1.9.1
 	github.com/spf13/viper v1.18.2
-)`, name)
+)`, name, goVersion)
 	if err := os.WriteFile(filepath.Join(name, "go.mod"), []byte(goModContent), 0644); err != nil {
 		return fmt.Errorf("failed to write go.mod: %w", err)
 	}
 
-	// cmd/server.go file content
+	// 其余内容保持不变 ↓
 	serverContent := fmt.Sprintf(`package main
 
 import (
@@ -138,7 +152,7 @@ func main() {
 	})
 
 	port := config.Cfg.Server.Port
-	fmt.Printf("Server running at http://localhost:%%d\\n", port)
+	fmt.Printf("Server running at http://localhost:%%d\n", port)
 	if err := r.Run(fmt.Sprintf(":%%d", port)); err != nil {
 		log.Printf("server start error: %%v", err)
 	}
@@ -147,7 +161,6 @@ func main() {
 		return fmt.Errorf("failed to write cmd/server.go: %w", err)
 	}
 
-	// internal/router/main_router.go file content
 	routerContent := `package router
 
 import (
@@ -162,16 +175,14 @@ func InitRouter() *gin.Engine {
 		return fmt.Errorf("failed to write internal/router/main_router.go: %w", err)
 	}
 
-	// README.md file content
 	readmeContent := fmt.Sprintf(`# %s
 
 This project uses Go language with a layered architecture.
 
-## Structure Explanation
+## Structure
 - internal/handler: Interface layer (Controller)
 - internal/service: Business logic layer
 - internal/repository: Data access layer
-- internal/request/response: DTOs
 
 ## Startup
 1. cd %s
@@ -182,14 +193,12 @@ This project uses Go language with a layered architecture.
 		return fmt.Errorf("failed to write README.md: %w", err)
 	}
 
-	// config.yaml file content
 	configYamlContent := `server:
   port: 8080`
 	if err := os.WriteFile(filepath.Join(name, "config.yaml"), []byte(configYamlContent), 0644); err != nil {
 		return fmt.Errorf("failed to write config.yaml: %w", err)
 	}
 
-	// config/config.go file content
 	configGoContent := `package config
 
 import (
@@ -232,4 +241,36 @@ func LoadConfig() {
 	}
 
 	return nil
+}
+
+// compareGoVersion compares two Go version strings (e.g. "1.18" < "1.21" → -1)
+func compareGoVersion(v1, v2 string) int {
+	parse := func(v string) (int, int) {
+		parts := strings.Split(v, ".")
+		major := 0
+		minor := 0
+		if len(parts) >= 1 {
+			fmt.Sscanf(parts[0], "%d", &major)
+		}
+		if len(parts) >= 2 {
+			fmt.Sscanf(parts[1], "%d", &minor)
+		}
+		return major, minor
+	}
+
+	m1, n1 := parse(v1)
+	m2, n2 := parse(v2)
+
+	if m1 != m2 {
+		if m1 < m2 {
+			return -1
+		}
+		return 1
+	}
+	if n1 < n2 {
+		return -1
+	} else if n1 > n2 {
+		return 1
+	}
+	return 0
 }
