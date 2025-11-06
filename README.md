@@ -17,14 +17,19 @@ To install `shiroha` on your system, you need to have **Go (1.18 or higher)** in
 if you use go to install this tool,you should make sure that you have already added go env to your environment.
 
 ```bash
-# Assuming you have the source code or a public repository URL:
-# Replace <repo-url> with the actual repository path if needed.
 go install github.com/NexusXian/shiroha@latest
 ```
 
-
-
 **Note:** The CLI tool is named `shiroha`. Ensure your `$GOPATH/bin` or `$GOBIN` is in your system's `$PATH` environment variable to run the command globally.
+<br>
+For Arch-based Linux distributions (including Manjaro, ArcoLinux, etc.), you can easily install shiroha-cli from the Arch User Repository (AUR).
+Use your preferred AUR helper (such as yay or paru):
+
+```Bash
+yay -S shiroha-cli
+# OR
+paru -S shiroha-cli
+```
 
 ## 💻 Usage
 
