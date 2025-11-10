@@ -32,19 +32,23 @@ var newCmd = &cobra.Command{
 		fmt.Println("\nNext steps:")
 		fmt.Printf("cd %s\n", projectName)
 		fmt.Println("go mod tidy")
+		fmt.Println("swag init -g cmd/server.go -o docs")
 		fmt.Println("go run cmd/server.go")
 
 		reader := bufio.NewReader(os.Stdin)
-		fmt.Print("\nDo you want to enter the directory, run 'go mod tidy' and start the project? (y/n): ")
+		// Updated prompt to include Swagger generation
+		fmt.Print("\nDo you want to enter the directory, run 'go mod tidy', generate Swagger docs, and start the project? (Y/n, default Y): ") // 提示语更新
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			return fmt.Errorf("failed to read input: %w", err)
 		}
 
 		input = strings.TrimSpace(strings.ToLower(input))
-		if input == "y" || input == "yes" {
+		// 默认回车 (input == "") 视为同意，与 "y" 或 "yes" 相同
+		if input == "y" || input == "yes" || input == "" {
 			projectDir := filepath.Join(".", projectName)
 
+			// 1. Run go mod tidy
 			fmt.Println("\nExecuting 'go mod tidy'...")
 			tidyCmd := exec.Command("go", "mod", "tidy")
 			tidyCmd.Dir = projectDir
@@ -55,6 +59,21 @@ var newCmd = &cobra.Command{
 			}
 			fmt.Println("✅ 'go mod tidy' completed successfully")
 
+			// 2. Run swag init to generate documentation
+			fmt.Println("\nExecuting 'swag init -g cmd/server.go -o docs' to generate API documentation...")
+			swagCmd := exec.Command("swag", "init", "-g", "cmd/server.go", "-o", "docs")
+			swagCmd.Dir = projectDir
+			swagCmd.Stdout = os.Stdout
+			swagCmd.Stderr = os.Stderr
+			if err := swagCmd.Run(); err != nil {
+				// Non-fatal error for swag init, often means `swag` tool isn't installed.
+				// We proceed to run the server, but inform the user.
+				fmt.Printf("⚠️ Warning: Failed to run 'swag init'. Please ensure the 'swag' tool is installed (go install github.com/swaggo/swag/cmd/swag@latest): %v\n", err)
+			} else {
+				fmt.Println("✅ Swagger documentation generated successfully")
+			}
+
+			// 3. Start the project
 			fmt.Println("\nStarting the project...")
 			runCmd := exec.Command("go", "run", "cmd/server.go")
 			runCmd.Dir = projectDir
@@ -86,6 +105,7 @@ func createProjectStructure(name string) error {
 		"pkg/utils",
 		"config",
 		"sql",
+		"docs", // Added docs folder for swagger output
 	}
 
 	for _, dir := range dirs {
@@ -95,147 +115,197 @@ func createProjectStructure(name string) error {
 		}
 	}
 
-	// 获取当前 Go 版本
-	goVersion := runtime.Version() // e.g., "go1.21.3"
+	// get current go version
+	goVersion := runtime.Version() // go1.21.3
 	goVersion = strings.TrimPrefix(goVersion, "go")
 
-	// 只保留主版本号和次版本号，例如 1.21.3 -> 1.21
 	parts := strings.Split(goVersion, ".")
 	if len(parts) >= 2 {
 		goVersion = parts[0] + "." + parts[1]
 	} else {
-		goVersion = "1.18" // fallback
+		goVersion = "1.18"
 	}
 
-	// 确保最低为 1.18
 	if compareGoVersion(goVersion, "1.18") < 0 {
 		goVersion = "1.18"
 	}
 
-	// 生成 go.mod
+	// -------- ✅ go.mod (latest versions) --------
 	goModContent := fmt.Sprintf(`module %s
 
 go %s
 
 require (
-	github.com/gin-gonic/gin v1.9.1
-	github.com/spf13/viper v1.18.2
-)`, name, goVersion)
+    github.com/gin-gonic/gin latest
+    github.com/spf13/viper latest
+    github.com/swaggo/files latest
+    github.com/swaggo/gin-swagger latest
+    github.com/swaggo/swag latest
+)
+`, name, goVersion)
+
 	if err := os.WriteFile(filepath.Join(name, "go.mod"), []byte(goModContent), 0644); err != nil {
 		return fmt.Errorf("failed to write go.mod: %w", err)
 	}
 
-	// 其余内容保持不变 ↓
 	serverContent := fmt.Sprintf(`package main
 
 import (
-	"fmt"
-	"log"
+    _ "%s/docs" // swagger docs
 
-	"%s/config"
-	"%s/internal/router"
+    "fmt"
+    "log"
 
-	"github.com/gin-gonic/gin"
+    "%s/config"
+    "%s/internal/handler" // 导入新的 handler 包
+    "%s/internal/router"
+
 )
 
+// @title Shiroha API
+// @version 1.0
+// @description Auto-generated API documentation by Shiroha CLI.
+// @host localhost:8080
+// @BasePath /
+
 func init() {
-	config.LoadConfig()
+    config.LoadConfig()
 }
 
 func main() {
-	r := router.InitRouter()
+    r := router.InitRouter()
 
-	r.GET("/test", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"message": "Hello Shiroha",
-		})
-	})
+    // 路由调用 internal/handler/test_handler.go 中的函数
+    r.GET("/test", handler.TestEndpoint)
 
-	port := config.Cfg.Server.Port
-	fmt.Printf("Server running at http://localhost:%%d\n", port)
-	if err := r.Run(fmt.Sprintf(":%%d", port)); err != nil {
-		log.Printf("server start error: %%v", err)
-	}
-}`, name, name)
+    port := config.Cfg.Server.Port
+    fmt.Printf("Server running at http://localhost:%%d\n", port)
+    if err := r.Run(fmt.Sprintf(":%%d", port)); err != nil {
+       log.Printf("server start error: %%v", err)
+    }
+}
+`, name, name, name, name)
+
 	if err := os.WriteFile(filepath.Join(name, "cmd", "server.go"), []byte(serverContent), 0644); err != nil {
 		return fmt.Errorf("failed to write cmd/server.go: %w", err)
+	}
+
+	// -------- ✅ test_handler.go (NEW FILE) --------
+	testHandlerContent := `package handler
+
+import (
+    "github.com/gin-gonic/gin"
+)
+
+// TestEndpoint
+// @Summary Test endpoint
+// @Description Returns a simple greeting message to verify server status.
+// @Tags Health
+// @Accept  json
+// @Produce json
+// @Success 200 {object} map[string]interface{} "Returns {message: 'Hello Shiroha'}"
+// @Router /test [get]
+func TestEndpoint(c *gin.Context) {
+    c.JSON(200, gin.H{
+       "message": "Hello Shiroha",
+    })
+}
+`
+
+	if err := os.WriteFile(filepath.Join(name, "internal", "handler", "test_handler.go"), []byte(testHandlerContent), 0644); err != nil {
+		return fmt.Errorf("failed to write internal/handler/test_handler.go: %w", err)
 	}
 
 	routerContent := `package router
 
 import (
-	"github.com/gin-gonic/gin"
+    swaggerFiles "github.com/swaggo/files"
+    ginSwagger "github.com/swaggo/gin-swagger"
+
+    "github.com/gin-gonic/gin"
 )
 
 func InitRouter() *gin.Engine {
-	r := gin.Default()
-	return r
-}`
+    r := gin.Default()
+
+    // swagger UI
+    r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
+    return r
+}
+`
+
 	if err := os.WriteFile(filepath.Join(name, "internal", "router", "main_router.go"), []byte(routerContent), 0644); err != nil {
 		return fmt.Errorf("failed to write internal/router/main_router.go: %w", err)
 	}
 
+	// -------- ✅ README --------
 	readmeContent := fmt.Sprintf(`# %s
 
-This project uses Go language with a layered architecture.
+This project uses Go with a clean layered architecture.
 
-## Structure
-- internal/handler: Interface layer (Controller)
-- internal/service: Business logic layer
-- internal/repository: Data access layer
+## Swagger Docs
 
-## Startup
-1. cd %s
-2. go mod tidy
-3. go run cmd/server.go
-`, name, name)
+Generate:
+    swag init -g cmd/server.go -o docs
+
+Visit:
+    http://localhost:8080/swagger/index.html
+
+`, name)
+
 	if err := os.WriteFile(filepath.Join(name, "README.md"), []byte(readmeContent), 0644); err != nil {
 		return fmt.Errorf("failed to write README.md: %w", err)
 	}
 
+	// -------- ✅ config.yaml --------
 	configYamlContent := `server:
   port: 8080`
+
 	if err := os.WriteFile(filepath.Join(name, "config.yaml"), []byte(configYamlContent), 0644); err != nil {
 		return fmt.Errorf("failed to write config.yaml: %w", err)
 	}
 
+	// -------- ✅ config.go --------
 	configGoContent := `package config
 
 import (
-	"log"
+    "log"
 
-	"github.com/spf13/viper"
+    "github.com/spf13/viper"
 )
 
 type Config struct {
-	Server *ServerConfig ` + "`mapstructure:\"server\"`" + `
+    Server *ServerConfig ` + "`mapstructure:\"server\"`" + `
 }
 
 type ServerConfig struct {
-	Port int ` + "`mapstructure:\"port\"`" + `
+    Port int ` + "`mapstructure:\"port\"`" + `
 }
 
 var Cfg *Config
 
 func LoadConfig() {
-	v := viper.New()
-	v.SetConfigName("config")
-	v.SetConfigType("yaml")
+    v := viper.New()
+    v.SetConfigName("config")
+    v.SetConfigType("yaml")
 
-	v.AddConfigPath(".")
-	v.AddConfigPath("./config")
-	v.AddConfigPath("../config")
-	v.AddConfigPath("..")
+    v.AddConfigPath(".")
+    v.AddConfigPath("./config")
+    v.AddConfigPath("../config")
+    v.AddConfigPath("..")
 
-	if err := v.ReadInConfig(); err != nil {
-		log.Fatalf("Failed to read config file: %%v", err)
-	}
+    if err := v.ReadInConfig(); err != nil {
+       log.Fatalf("Failed to read config file: %v", err)
+    }
 
-	Cfg = &Config{}
-	if err := v.Unmarshal(Cfg); err != nil {
-		log.Fatalf("Failed to unmarshal config: %%v", err)
-	}
-}`
+    Cfg = &Config{}
+    if err := v.Unmarshal(Cfg); err != nil {
+       log.Fatalf("Failed to unmarshal config: %v", err)
+    }
+}
+`
+
 	if err := os.WriteFile(filepath.Join(name, "config", "config.go"), []byte(configGoContent), 0644); err != nil {
 		return fmt.Errorf("failed to write config/config.go: %w", err)
 	}

@@ -38,4 +38,6 @@ func init() {
 	// Register subcommands
 	rootCmd.AddCommand(newCmd)
 	rootCmd.AddCommand(buildCmd)
+	rootCmd.AddCommand(docCmd)
+	rootCmd.AddCommand(runCmd)
 }
