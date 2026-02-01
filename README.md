@@ -91,9 +91,11 @@ The project uses a standard layered architecture for maintainability and scalabi
 | internal/request        | Data Transfer Object (DTO) | Input structs used to bind and validate incoming request data (e.g., JSON body, query params). |
 | internal/response       | Data Transfer Object (DTO) | Output structs used to format and serialize data sent back to the client. |
 | internal/database       | Database Config        | Holds database connection setup and migration logic.                     |
+| internal/middleware     | Middleware             | you can put some middleware here for management                     |
 | config                  | Configuration          | Contains configuration loading logic (config.go) using Viper, reading settings from config.yaml. |
 | pkg/utils               | Shared Utilities       | Common, reusable non-domain-specific functions (e.g., formatting, string manipulation). |
 | pkg/jwt                 | Shared Utilities       | Logic for JWT token generation, parsing, and authentication.             |
+| pkg/applog/             | Shared Utilities       | This package is for init the zap logger,you can configure it by wharever you want             |
 | sql                     | Database               | Stores database migration scripts or schema definitions.                 |
 | bin                     | Build Output           | Destination for the compiled executable binary files after running `shiroha build`. |
 
@@ -108,3 +110,7 @@ Shiroha is designed to be compatible with modern Go development practices.
 | Fallback                | If the detected Go version is older than 1.18, the CLI will automatically enforce the minimum version (go 1.18) to ensure all dependencies and modern features are available. |
 
 ---
+
+
+
+### welcome to contribute!!!

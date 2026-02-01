@@ -213,7 +213,7 @@ func main() {
 		return fmt.Errorf("failed to write cmd/server.go: %w", err)
 	}
 
-	// -------- ✅ test_handler.go (NEW FILE) --------
+	// -------- test_handler.go (NEW FILE) --------
 	testHandlerContent := `package handler
 
 import (
