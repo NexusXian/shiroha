@@ -48,8 +48,25 @@ var newCmd = &cobra.Command{
 		if input == "y" || input == "yes" || input == "" {
 			projectDir := filepath.Join(".", projectName)
 
-			// 1. Run go mod tidy
-			fmt.Println("\nExecuting 'go mod tidy'...")
+			// 1. Install swag tool if not exists
+			fmt.Println("\nChecking swag tool...")
+			swagCheckCmd := exec.Command("which", "swag")
+			if err := swagCheckCmd.Run(); err != nil {
+				fmt.Println("swag tool not found, installing...")
+				installSwagCmd := exec.Command("go", "install", "github.com/swaggo/swag/cmd/swag@latest")
+				installSwagCmd.Stdout = os.Stdout
+				installSwagCmd.Stderr = os.Stderr
+				if err := installSwagCmd.Run(); err != nil {
+					fmt.Printf("⚠️ Warning: Failed to install swag tool: %v\n", err)
+				} else {
+					fmt.Println("✅ swag tool installed successfully")
+				}
+			} else {
+				fmt.Println("✅ swag tool already installed")
+			}
+
+			// 2. Run go mod tidy to install dependencies
+			fmt.Println("\nExecuting 'go mod tidy' to install dependencies...")
 			tidyCmd := exec.Command("go", "mod", "tidy")
 			tidyCmd.Dir = projectDir
 			tidyCmd.Stdout = os.Stdout
@@ -59,7 +76,7 @@ var newCmd = &cobra.Command{
 			}
 			fmt.Println("✅ 'go mod tidy' completed successfully")
 
-			// 2. Run swag init to generate documentation
+			// 3. Run swag init to generate documentation
 			fmt.Println("\nExecuting 'swag init -g cmd/server.go -o docs' to generate API documentation...")
 			swagCmd := exec.Command("swag", "init", "-g", "cmd/server.go", "-o", "docs")
 			swagCmd.Dir = projectDir
@@ -68,12 +85,13 @@ var newCmd = &cobra.Command{
 			if err := swagCmd.Run(); err != nil {
 				// Non-fatal error for swag init, often means `swag` tool isn't installed.
 				// We proceed to run the server, but inform the user.
-				fmt.Printf("⚠️ Warning: Failed to run 'swag init'. Please ensure the 'swag' tool is installed (go install github.com/swaggo/swag/cmd/swag@latest): %v\n", err)
+				fmt.Printf("⚠️ Warning: Failed to run 'swag init': %v\n", err)
+				fmt.Println("Note: Swagger docs will be generated on the first run if swag is installed.")
 			} else {
 				fmt.Println("✅ Swagger documentation generated successfully")
 			}
 
-			// 3. Start the project
+			// 4. Start the project
 			fmt.Println("\nStarting the project...")
 			runCmd := exec.Command("go", "run", "cmd/server.go")
 			runCmd.Dir = projectDir
@@ -95,6 +113,7 @@ func createProjectStructure(name string) error {
 		"internal/database",
 		"internal/handler",
 		"internal/model",
+		"internal/middleware",
 		"internal/repository",
 		"internal/request",
 		"internal/response",
@@ -106,6 +125,7 @@ func createProjectStructure(name string) error {
 		"config",
 		"sql",
 		"docs", // Added docs folder for swagger output
+		"pkg/applog",
 	}
 
 	for _, dir := range dirs {
@@ -130,17 +150,18 @@ func createProjectStructure(name string) error {
 		goVersion = "1.18"
 	}
 
-	// -------- ✅ go.mod (latest versions) --------
+	// -------- go.mod (compatible versions) --------
 	goModContent := fmt.Sprintf(`module %s
 
 go %s
 
 require (
-    github.com/gin-gonic/gin latest
-    github.com/spf13/viper latest
-    github.com/swaggo/files latest
-    github.com/swaggo/gin-swagger latest
-    github.com/swaggo/swag latest
+	github.com/gin-gonic/gin v1.10.0
+	github.com/spf13/viper v1.18.2
+	github.com/swaggo/files v1.0.1
+	github.com/swaggo/gin-swagger v1.6.0
+	github.com/swaggo/swag v1.16.3
+	go.uber.org/zap v1.27.0
 )
 `, name, goVersion)
 
@@ -154,11 +175,12 @@ import (
     _ "%s/docs" // swagger docs
 
     "fmt"
-    "log"
 
     "%s/config"
     "%s/internal/handler" // 导入新的 handler 包
     "%s/internal/router"
+    applog "%s/pkg/applog"
+    "go.uber.org/zap"
 
 )
 
@@ -179,12 +201,13 @@ func main() {
     r.GET("/test", handler.TestEndpoint)
 
     port := config.Cfg.Server.Port
-    fmt.Printf("Server running at http://localhost:%%d\n", port)
+    applog.Info("Server starting", zap.Int("port", port))
     if err := r.Run(fmt.Sprintf(":%%d", port)); err != nil {
-       log.Printf("server start error: %%v", err)
+       applog.Error("server start error", zap.String("error", err.Error()))
     }
+    defer applog.Sync()
 }
-`, name, name, name, name)
+`, name, name, name, name, name)
 
 	if err := os.WriteFile(filepath.Join(name, "cmd", "server.go"), []byte(serverContent), 0644); err != nil {
 		return fmt.Errorf("failed to write cmd/server.go: %w", err)
@@ -216,25 +239,28 @@ func TestEndpoint(c *gin.Context) {
 		return fmt.Errorf("failed to write internal/handler/test_handler.go: %w", err)
 	}
 
-	routerContent := `package router
+	routerContent := fmt.Sprintf(`package router
 
 import (
     swaggerFiles "github.com/swaggo/files"
     ginSwagger "github.com/swaggo/gin-swagger"
 
+    "%s/internal/middleware"
     "github.com/gin-gonic/gin"
 )
 
 func InitRouter() *gin.Engine {
     r := gin.Default()
 
+    // Apply CORS middleware
+    r.Use(middleware.CORS())
+
     // swagger UI
     r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
     return r
 }
-`
-
+`, name)
 	if err := os.WriteFile(filepath.Join(name, "internal", "router", "main_router.go"), []byte(routerContent), 0644); err != nil {
 		return fmt.Errorf("failed to write internal/router/main_router.go: %w", err)
 	}
@@ -270,9 +296,8 @@ Visit:
 	configGoContent := `package config
 
 import (
-    "log"
-
-    "github.com/spf13/viper"
+	"github.com/spf13/viper"
+	"go.uber.org/zap"
 )
 
 type Config struct {
@@ -296,18 +321,111 @@ func LoadConfig() {
     v.AddConfigPath("..")
 
     if err := v.ReadInConfig(); err != nil {
-       log.Fatalf("Failed to read config file: %v", err)
+       logger, _ := zap.NewProduction()
+       logger.Fatal("Failed to read config file", zap.Error(err))
     }
 
     Cfg = &Config{}
     if err := v.Unmarshal(Cfg); err != nil {
-       log.Fatalf("Failed to unmarshal config: %v", err)
+       logger, _ := zap.NewProduction()
+       logger.Fatal("Failed to unmarshal config", zap.Error(err))
     }
 }
 `
 
 	if err := os.WriteFile(filepath.Join(name, "config", "config.go"), []byte(configGoContent), 0644); err != nil {
 		return fmt.Errorf("failed to write config/config.go: %w", err)
+	}
+
+	// -------- ✅ applog.go (zap logger) --------
+	applogContent := `package applog
+
+import (
+	"log"
+
+	"go.uber.org/zap"
+)
+
+var Logger = InitZap()
+
+func InitZap() *zap.Logger {
+	// 推荐使用 NewProductionConfig 做更灵活的配置
+	cfg := zap.NewProductionConfig()
+	// 可根据需要调整配置（例如开发环境输出更详细信息）
+	cfg.Development = true
+	cfg.Encoding = "console" // 开发环境可用控制台格式
+
+	logger, err := cfg.Build()
+	if err != nil {
+		log.Fatalf("初始化 zap logger 失败: %v", err)
+	}
+	return logger
+}
+
+// Sync flushes any buffered log entries
+func Sync() {
+	if Logger != nil {
+		_ = Logger.Sync()
+	}
+}
+
+// Info logs a message at info level
+func Info(msg string, fields ...zap.Field) {
+	Logger.Info(msg, fields...)
+}
+
+// Error logs a message at error level
+func Error(msg string, fields ...zap.Field) {
+	Logger.Error(msg, fields...)
+}
+
+// Fatal logs a message at fatal level and exits
+func Fatal(msg string, fields ...zap.Field) {
+	Logger.Fatal(msg, fields...)
+}
+
+// Debug logs a message at debug level
+func Debug(msg string, fields ...zap.Field) {
+	Logger.Debug(msg, fields...)
+}
+
+// Warn logs a message at warn level
+func Warn(msg string, fields ...zap.Field) {
+	Logger.Warn(msg, fields...)
+}
+`
+
+	if err := os.WriteFile(filepath.Join(name, "pkg", "applog", "applog.go"), []byte(applogContent), 0644); err != nil {
+		return fmt.Errorf("failed to write pkg/applog/applog.go: %w", err)
+	}
+
+	// -------- ✅ cors.go (CORS middleware) --------
+	corsContent := `package middleware
+
+import (
+	"github.com/gin-gonic/gin"
+)
+
+// CORS middleware that allows all origins
+func CORS() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	}
+}
+`
+
+	if err := os.WriteFile(filepath.Join(name, "internal", "middleware", "cors.go"), []byte(corsContent), 0644); err != nil {
+		return fmt.Errorf("failed to write internal/middleware/cors.go: %w", err)
 	}
 
 	return nil
